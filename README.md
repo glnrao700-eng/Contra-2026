@@ -35,7 +35,11 @@ Touch buttons appear automatically on touch devices.
 - **Rendering:** PBR materials, image-based lighting generated from the procedural sky, soft shadows that follow the camera, ACES tone mapping, HDR bloom, fog, animated water, dust motes.
 - **Physics:** fixed 120 Hz step, gravity, acceleration and friction, coyote time, jump buffering, variable jump height, one-way ledges, AABB collision.
 - **Physics objects:** debris and ejected shell casings with gravity, bouncing, spin and water drag; artillery shells on ballistic arcs aimed at where you're heading; enemies knocked back when they die; bouncing weapon pickups.
-- **Stage 1 (Jungle Assault):** river pits, a bridge that blows up under you, ledges, a raised plateau, runners, riflemen, rotating turrets, and flying weapon capsules.
+- **3 stages**, each ending in a fortress boss. Score, lives and weapon carry over between stages; on game over you continue from the stage you reached.
+  1. **Jungle Assault**: sunset jungle, river pits, an exploding bridge.
+  2. **Snow Field**: snowy pines, cold fog, plateaus, more turrets. Enemies are faster and shoot more often.
+  3. **Alien Lair**: night sky, glowing crystals, fossil ribs, acid river. The hardest stage, with the toughest boss.
+- Enemies: runners, riflemen, rotating turrets, and flying weapon capsules.
 - **Weapons:** Rifle, Machine Gun (M), Spread (S), piercing Laser (L).
 - **Boss:** fortress wall with a core, two artillery cannons and soldier reinforcements.
 - **Audio:** all synthesized with WebAudio (SFX plus a sequenced soundtrack).

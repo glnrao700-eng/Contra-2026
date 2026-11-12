@@ -178,16 +178,20 @@ function texMat(tex, rx, ry, extra = {}) {
 // ======================================================================
 // SKY + ENVIRONMENT (image-based lighting generated from the sky)
 // ======================================================================
-function buildSky() {
-  const geo = new THREE.SphereGeometry(320, 40, 20);
-  const pos = geo.attributes.position, cols = [];
-  const zen = new THREE.Color(0x2f62a6), hor = new THREE.Color(0xf3cf9c), gnd = new THREE.Color(0x6a5a40), c = new THREE.Color();
+function paintSky(geo, th) {
+  const pos = geo.attributes.position, col = geo.attributes.color;
+  const zen = new THREE.Color(th.zen), hor = new THREE.Color(th.hor), gnd = new THREE.Color(th.gnd), c = new THREE.Color();
   for (let i = 0; i < pos.count; i++) {
     const t = pos.getY(i) / 320;
     if (t >= 0) c.copy(hor).lerp(zen, Math.pow(t, 0.55)); else c.copy(hor).lerp(gnd, Math.min(1, -t * 4));
-    cols.push(c.r, c.g, c.b);
+    col.setXYZ(i, c.r, c.g, c.b);
   }
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+  col.needsUpdate = true;
+}
+function buildSky(th) {
+  const geo = new THREE.SphereGeometry(320, 40, 20);
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(geo.attributes.position.count * 3), 3));
+  if (th) paintSky(geo, th);
   return new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false }));
 }
 const sky = buildSky();
@@ -196,21 +200,25 @@ scene.add(sky);
 const sunDisc = new THREE.Sprite(new THREE.SpriteMaterial({ map: texSoft, color: new THREE.Color(8, 6, 3.5), fog: false, depthWrite: false, blending: THREE.AdditiveBlending }));
 sunDisc.scale.setScalar(70);
 scene.add(sunDisc);
-{
-  const pmrem = new THREE.PMREMGenerator(renderer);
+const pmrem = new THREE.PMREMGenerator(renderer);
+let envRT = null;
+/** Image-based lighting generated from the stage sky + sun. */
+function makeEnv(th) {
   const envScene = new THREE.Scene();
-  envScene.add(buildSky());
-  const s = new THREE.Mesh(new THREE.SphereGeometry(20, 16, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(30, 24, 16) }));
+  envScene.add(buildSky(th));
+  const s = new THREE.Mesh(new THREE.SphereGeometry(20, 16, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(...th.disc).multiplyScalar(3.75) }));
   s.position.set(-150, 160, 200);
   envScene.add(s);
-  scene.environment = pmrem.fromScene(envScene, 0.02, 0.1, 1000).texture;
+  const rt = pmrem.fromScene(envScene, 0.02, 0.1, 1000);
+  envScene.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  return rt;
 }
 
 // ======================================================================
 // AUDIO (fully synthesized with WebAudio)
 // ======================================================================
 const sfx = {
-  ctx: null, master: null, musicBus: null, noise: null, musicOn: true, step: 0, nextT: 0,
+  ctx: null, master: null, musicBus: null, noise: null, musicOn: true, step: 0, nextT: 0, key: 1, tempo: 1,
   init() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -270,12 +278,12 @@ const sfx = {
          0, 0, 0, 0, 293.7, 0, 349.2, 0, 392, 0, 0, 0, 329.6, 0, 0, 0],
   music() {
     const c = this.ctx; if (!c || !this.musicOn) return;
-    const stepDur = 60 / 152 / 4;
+    const stepDur = 60 / (152 * this.tempo) / 4, K = this.key;
     while (this.nextT < c.currentTime + 0.12) {
       const when = this.nextT - c.currentTime, i = this.step % 32;
-      const b = this.BASS[i];
+      const b = this.BASS[i] * K;
       if (b) { this.tone(b, b * 0.98, stepDur * 1.6, 0.35, 'sawtooth', this.musicBus, when); this.tone(b / 2, b / 2, stepDur * 1.6, 0.3, 'square', this.musicBus, when); }
-      const l = this.LEAD[i];
+      const l = this.LEAD[i] * K;
       if (l && this.step % 64 >= 32) this.tone(l, l, stepDur * 2.2, 0.12, 'square', this.musicBus, when);
       if (i % 4 === 0) this.tone(150, 40, 0.16, 0.9, 'sine', this.musicBus, when);
       if (i % 8 === 4) this.burst(0.14, 4000, 0.4, 'highpass', this.musicBus, when);
@@ -430,51 +438,131 @@ function moveBody(b, dt) {
 // ======================================================================
 // LEVEL GEOMETRY
 // ======================================================================
-const GROUND = [[-30, 60, 0], [64, 110, 0], [134, 160, 0], [160, 190, 2], [190, 200, 0], [204, 340, 0]];
-const LEDGES = [[74, 82, 2.6], [86, 94, 5.2], [140, 148, 2.6], [214, 222, 2.6], [226, 234, 5.4], [240, 248, 2.6], [283, 290, 2.6]];
-const BRIDGE = { x0: 110, seg: 4, count: 6 };
 const DEPTH_FRONT = 3, DEPTH_BACK = -7;
 
-function buildGround(x0, x1, top) {
+const texSnow = canvasTex(256, 256, (g, w, h) => {
+  g.fillStyle = '#e8eef4'; g.fillRect(0, 0, w, h);
+  speckle(g, w, h, 1400, ['#ffffff', '#cdd8e4', '#b8c6d6', '#f4f8ff'], 1, 3);
+});
+
+// ---------- Visual themes ----------
+const THEMES = {
+  jungle: {
+    zen: 0x2f62a6, hor: 0xf3cf9c, gnd: 0x6a5a40, fog: 0xcdb79a, fogNear: 35, fogFar: 175,
+    hemi: [0xd8ecff, 0x4a3a22, 0.7], sun: [0xffdcae, 3.4], disc: [8, 6, 3.5], water: 0x1c5560, waterEm: 0x000000,
+    top: texGrass, topTint: 0xffffff, cliff: 0xffffff, floor: 0x9ab080, mount: 0x5d6e7d, mountH: 1, roots: 0x5a4330,
+    rock: 0x77706a, bush: 0x3a6a26, bushEm: 0x000000, dust: 0xfff0c8, flora: 'jungle',
+  },
+  snow: {
+    zen: 0x5d82b4, hor: 0xe4ecf2, gnd: 0x9aa4ae, fog: 0xc9d5e0, fogNear: 22, fogFar: 140,
+    hemi: [0xeef4ff, 0x6a7480, 0.95], sun: [0xfff0dc, 2.6], disc: [5, 5, 5.5], water: 0x4f7486, waterEm: 0x000000,
+    top: texSnow, topTint: 0xffffff, cliff: 0x8f9aaa, floor: 0xe6eef6, mount: 0xe8eef4, mountH: 1.2, roots: 0xd8ecff,
+    rock: 0x8a929c, bush: 0xf0f4f8, bushEm: 0x000000, dust: 0xffffff, flora: 'pine',
+  },
+  alien: {
+    zen: 0x07041a, hor: 0x5e1838, gnd: 0x140810, fog: 0x2c0c22, fogNear: 18, fogFar: 120,
+    hemi: [0x8a70ff, 0x381028, 0.6], sun: [0xff7a96, 2.0], disc: [7, 1.4, 2.4], water: 0x2a6a10, waterEm: 0x1a5a00,
+    top: texGrass, topTint: 0xb050d0, cliff: 0x6a4a66, floor: 0x5a2a5a, mount: 0x2a1838, mountH: 1.5, roots: 0x7a3a8a,
+    rock: 0x4a3a50, bush: 0x30104a, bushEm: 0x5010a0, dust: 0xff7ad0, flora: 'alien',
+  },
+};
+
+// ---------- Stages ----------
+// ground: [x0, x1, top]; ledges (one-way): [x0, x1, top]; bridges collapse as you cross.
+// Rules that keep every stage beatable: pits <= 4 m, steps <= 2.6 m (max jump ~5.4 m / ~2.9 m).
+// Boss fortress is always at x = 300.
+const STAGES = [
+  {
+    name: 'JUNGLE ASSAULT', theme: THEMES.jungle, diff: 1, bossHp: 60, key: 1, tempo: 1,
+    ground: [[-30, 60, 0], [64, 110, 0], [134, 160, 0], [160, 190, 2], [190, 200, 0], [204, 340, 0]],
+    ledges: [[74, 82, 2.6], [86, 94, 5.2], [140, 148, 2.6], [214, 222, 2.6], [226, 234, 5.4], [240, 248, 2.6], [283, 290, 2.6]],
+    bridges: [{ x0: 110, count: 6 }],
+    spawns: [
+    { x: 14, t: 'runners', n: 2 }, { x: 22, t: 'flyer', drop: 'M' }, { x: 28, t: 'rifle', px: 38, py: 0 },
+    { x: 40, t: 'runners', n: 3 }, { x: 50, t: 'runners', n: 2, side: -1 }, { x: 68, t: 'rifle', px: 90, py: 5.2 },
+    { x: 72, t: 'runners', n: 3 }, { x: 86, t: 'turret', px: 104, py: 0 }, { x: 96, t: 'flyer', drop: 'S' },
+    { x: 112, t: 'runners', n: 3 }, { x: 128, t: 'rifle', px: 145, py: 2.6 }, { x: 140, t: 'runners', n: 3 },
+    { x: 155, t: 'rifle', px: 176, py: 2 }, { x: 160, t: 'turret', px: 186, py: 2 }, { x: 170, t: 'runners', n: 4 },
+    { x: 178, t: 'flyer', drop: 'L' }, { x: 194, t: 'runners', n: 3 }, { x: 205, t: 'rifle', px: 230, py: 5.4 },
+    { x: 210, t: 'turret', px: 237, py: 0 }, { x: 220, t: 'runners', n: 4 }, { x: 232, t: 'flyer', drop: 'S' },
+    { x: 240, t: 'rifle', px: 256, py: 0 }, { x: 250, t: 'runners', n: 4 }, { x: 258, t: 'rifle', px: 274, py: 0 },
+    { x: 264, t: 'runners', n: 3 }, { x: 276, t: 'boss' },
+  ],
+  },
+  {
+    name: 'SNOW FIELD', theme: THEMES.snow, diff: 1.2, bossHp: 80, key: 1.122, tempo: 1.05,
+    ground: [[-30, 46, 0], [50, 84, 0], [84, 120, 2.2], [124, 150, 0], [166, 196, 0], [200, 226, 0], [226, 250, 2], [254, 340, 0]],
+    ledges: [[60, 68, 2.6], [96, 104, 4.8], [132, 140, 2.6], [176, 184, 2.6], [180, 188, 5.2], [206, 214, 2.6], [234, 242, 4.6], [262, 270, 2.6], [283, 290, 2.6]],
+    bridges: [{ x0: 150, count: 4 }],
+    spawns: [
+      { x: 14, t: 'runners', n: 3 }, { x: 20, t: 'flyer', drop: 'M' }, { x: 26, t: 'rifle', px: 40, py: 0 },
+      { x: 34, t: 'turret', px: 44, py: 0 }, { x: 44, t: 'runners', n: 3 }, { x: 52, t: 'rifle', px: 66, py: 2.6 },
+      { x: 60, t: 'runners', n: 2, side: -1 }, { x: 72, t: 'turret', px: 88, py: 2.2 }, { x: 80, t: 'rifle', px: 100, py: 4.8 },
+      { x: 88, t: 'runners', n: 4 }, { x: 98, t: 'flyer', drop: 'S' }, { x: 108, t: 'rifle', px: 118, py: 2.2 },
+      { x: 116, t: 'runners', n: 3 }, { x: 124, t: 'turret', px: 136, py: 2.6 }, { x: 134, t: 'runners', n: 3 },
+      { x: 146, t: 'rifle', px: 170, py: 0 }, { x: 154, t: 'runners', n: 4 }, { x: 160, t: 'flyer', drop: 'L' },
+      { x: 168, t: 'turret', px: 186, py: 5.2 }, { x: 176, t: 'runners', n: 3 }, { x: 184, t: 'rifle', px: 210, py: 2.6 },
+      { x: 194, t: 'runners', n: 4 }, { x: 204, t: 'turret', px: 222, py: 0 }, { x: 214, t: 'flyer', drop: 'S' },
+      { x: 220, t: 'rifle', px: 238, py: 4.6 }, { x: 228, t: 'runners', n: 4 }, { x: 236, t: 'rifle', px: 248, py: 2 },
+      { x: 246, t: 'runners', n: 3 }, { x: 252, t: 'turret', px: 268, py: 2.6 }, { x: 258, t: 'rifle', px: 276, py: 0 },
+      { x: 264, t: 'runners', n: 4 }, { x: 276, t: 'boss' },
+    ],
+  },
+  {
+    name: 'ALIEN LAIR', theme: THEMES.alien, diff: 1.4, bossHp: 100, key: 0.891, tempo: 1.1,
+    ground: [[-30, 40, 0], [44, 70, 0], [70, 96, 2.4], [100, 126, 2.4], [126, 150, 0], [174, 200, 0], [204, 214, 0], [218, 244, 0], [244, 262, 2.4], [266, 340, 0]],
+    ledges: [[50, 58, 2.6], [78, 86, 5.0], [106, 114, 5.0], [132, 140, 2.6], [180, 188, 2.6], [186, 194, 5.2], [224, 232, 2.6], [248, 256, 5.0], [283, 290, 2.6]],
+    bridges: [{ x0: 150, count: 6 }],
+    spawns: [
+      { x: 12, t: 'runners', n: 3 }, { x: 18, t: 'flyer', drop: 'M' }, { x: 24, t: 'rifle', px: 36, py: 0 },
+      { x: 30, t: 'turret', px: 54, py: 2.6 }, { x: 36, t: 'runners', n: 4 }, { x: 44, t: 'runners', n: 2, side: -1 },
+      { x: 52, t: 'rifle', px: 66, py: 0 }, { x: 60, t: 'turret', px: 82, py: 5.0 }, { x: 66, t: 'runners', n: 4 },
+      { x: 76, t: 'rifle', px: 92, py: 2.4 }, { x: 84, t: 'flyer', drop: 'S' }, { x: 90, t: 'turret', px: 110, py: 5.0 },
+      { x: 96, t: 'runners', n: 4 }, { x: 104, t: 'rifle', px: 122, py: 2.4 }, { x: 112, t: 'runners', n: 3, side: -1 },
+      { x: 120, t: 'turret', px: 136, py: 2.6 }, { x: 128, t: 'rifle', px: 146, py: 0 }, { x: 136, t: 'runners', n: 4 },
+      { x: 150, t: 'flyer', drop: 'L' }, { x: 156, t: 'runners', n: 4 }, { x: 164, t: 'rifle', px: 184, py: 2.6 },
+      { x: 170, t: 'turret', px: 196, py: 0 }, { x: 180, t: 'runners', n: 4 }, { x: 188, t: 'rifle', px: 208, py: 0 },
+      { x: 196, t: 'flyer', drop: 'S' }, { x: 204, t: 'turret', px: 228, py: 2.6 }, { x: 212, t: 'runners', n: 4 },
+      { x: 222, t: 'rifle', px: 240, py: 0 }, { x: 230, t: 'turret', px: 252, py: 5.0 }, { x: 238, t: 'runners', n: 4 },
+      { x: 246, t: 'rifle', px: 258, py: 2.4 }, { x: 254, t: 'runners', n: 3, side: -1 }, { x: 260, t: 'rifle', px: 274, py: 0 },
+      { x: 266, t: 'runners', n: 4 }, { x: 276, t: 'boss' },
+    ],
+  },
+];
+let stageIdx = 0, STAGE = STAGES[0], builtStage = -1;
+const world = new THREE.Group(); // all static stage geometry lives here so it can be swapped
+scene.add(world);
+
+function buildGround(x0, x1, top, th) {
   const w = x1 - x0, h = top + 20, d = DEPTH_FRONT - DEPTH_BACK;
-  const cliff = texMat(texCliff, w / 6, h / 6), side = texMat(texCliff, d / 6, h / 6), grass = texMat(texGrass, w / 5, d / 5);
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), [side, side, grass, cliff, cliff, cliff]);
-  mesh.position.set(x0 + w / 2, top - h / 2, (DEPTH_FRONT + DEPTH_BACK) / 2);
-  mesh.receiveShadow = true;
-  scene.add(mesh);
-  // grassy lip on the front edge
-  const lip = new THREE.Mesh(new THREE.BoxGeometry(w, 0.25, 0.5), texMat(texGrass, w / 3, 1));
+  const cliff = texMat(texCliff, w / 6, h / 6, { color: th.cliff }), side = texMat(texCliff, d / 6, h / 6, { color: th.cliff });
+  const grass = texMat(th.top, w / 5, d / 5, { color: th.topTint });
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), [side, side, grass, cliff, cliff, cliff]);
+  m.position.set(x0 + w / 2, top - h / 2, (DEPTH_FRONT + DEPTH_BACK) / 2);
+  m.receiveShadow = true;
+  world.add(m);
+  const lip = new THREE.Mesh(new THREE.BoxGeometry(w, 0.25, 0.5), texMat(th.top, w / 3, 1, { color: th.topTint }));
   lip.position.set(x0 + w / 2, top - 0.08, DEPTH_FRONT - 0.15);
   lip.receiveShadow = true;
-  scene.add(lip);
+  world.add(lip);
   addSolid(x0, x1, top - h, top);
 }
-function buildLedge(x0, x1, top) {
-  const w = x1 - x0;
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.8, 3.4), [texMat(texCliff, 0.5, 0.2), texMat(texCliff, 0.5, 0.2), texMat(texGrass, w / 4, 1), texMat(texCliff, w / 5, 0.2), texMat(texCliff, w / 5, 0.15), texMat(texCliff, w / 5, 0.15)]);
+function buildLedge(x0, x1, top, th) {
+  const w = x1 - x0, cm = (rx, ry) => texMat(texCliff, rx, ry, { color: th.cliff });
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.8, 3.4), [cm(0.5, 0.2), cm(0.5, 0.2), texMat(th.top, w / 4, 1, { color: th.topTint }), cm(w / 5, 0.2), cm(w / 5, 0.15), cm(w / 5, 0.15)]);
   m.position.set(x0 + w / 2, top - 0.4, -0.4);
   m.castShadow = m.receiveShadow = true;
-  scene.add(m);
-  // hanging roots / stalactite rocks under the ledge
+  world.add(m);
+  // hanging roots / icicles / tendrils under the ledge
+  const rootMat = stdMat(th.roots, th.flora === 'pine' ? 0.15 : 1, 0, th.flora === 'alien' ? { emissive: new THREE.Color(0.25, 0.02, 0.35) } : {});
   for (let x = x0 + 0.6; x < x1 - 0.4; x += rand(0.7, 1.4)) {
-    const r = new THREE.Mesh(new THREE.ConeGeometry(rand(0.15, 0.35), rand(0.5, 1.3), 5), stdMat(0x5a4330, 1));
+    const r = new THREE.Mesh(new THREE.ConeGeometry(rand(0.15, 0.35), rand(0.5, 1.3), 5), rootMat);
     r.rotation.x = Math.PI;
     r.position.set(x, top - 0.9 - r.geometry.parameters.height / 2 + 0.2, rand(-1.5, 0.8));
     r.castShadow = true;
-    scene.add(r);
+    world.add(r);
   }
   addSolid(x0, x1, top - 0.8, top, { oneWay: true });
-}
-GROUND.forEach((g) => buildGround(...g));
-LEDGES.forEach((l) => buildLedge(...l));
-addSolid(300, 340, -20, 60); // fortress wall (boss)
-
-// jungle floor behind the play lane
-{
-  const m = new THREE.Mesh(new THREE.BoxGeometry(460, 2, 48), texMat(texGrass, 90, 10, { color: 0x9ab080 }));
-  m.position.set(150, -1.2, DEPTH_BACK - 24);
-  m.receiveShadow = true;
-  scene.add(m);
 }
 
 // ---------- Water ----------
@@ -496,18 +584,8 @@ function updateWater(t) {
 }
 
 // ---------- Scenery ----------
-function buildScenery() {
-  // distant mountains
-  const mMat = stdMat(0x5d6e7d, 1, 0, { flatShading: true });
-  for (let i = 0; i < 34; i++) {
-    const h = rand(25, 55), r = rand(18, 34);
-    const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, 7, 2), mMat);
-    m.position.set(-60 + i * 14 + rand(-6, 6), h / 2 - 4, rand(-150, -105));
-    m.rotation.y = rand(0, 6);
-    m.scale.x = rand(0.8, 1.4);
-    scene.add(m);
-  }
-  // instanced jungle trees
+const HIDE = new THREE.Matrix4().makeScale(0, 0, 0);
+function buildJungleFlora() {
   const N = 300;
   const trunkG = new THREE.CylinderGeometry(0.22, 0.42, 1, 6); trunkG.translate(0, 0.5, 0);
   const coneG = new THREE.ConeGeometry(1, 1, 8); coneG.translate(0, 0.5, 0);
@@ -525,10 +603,10 @@ function buildScenery() {
     if (round) s.set(rand(2, 3.4), rand(1.8, 2.8), rand(2, 3.4)); else s.set(rand(1.8, 2.8), h * 0.75, rand(1.8, 2.8));
     M.compose(p, q, s);
     col.setHSL(rand(0.24, 0.33), rand(0.35, 0.6), rand(0.18, 0.32));
-    if (round) { balls.setMatrixAt(i, M); balls.setColorAt(i, col); cones.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0)); }
-    else { cones.setMatrixAt(i, M); cones.setColorAt(i, col); balls.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0)); }
+    if (round) { balls.setMatrixAt(i, M); balls.setColorAt(i, col); cones.setMatrixAt(i, HIDE); cones.setColorAt(i, col); }
+    else { cones.setMatrixAt(i, M); cones.setColorAt(i, col); balls.setMatrixAt(i, HIDE); balls.setColorAt(i, col); }
   }
-  for (const im of [trunks, cones, balls]) { im.castShadow = true; im.receiveShadow = true; scene.add(im); }
+  for (const im of [trunks, cones, balls]) { im.castShadow = true; im.receiveShadow = true; world.add(im); }
   // palm trees close to the play lane
   const palmTrunk = stdMat(0x7a5c3c, 1), palmLeaf = stdMat(0x3c7a2a, 0.8, 0, { side: THREE.DoubleSide });
   const leafG = new THREE.BoxGeometry(2.6, 0.05, 0.55); leafG.translate(1.3, 0, 0);
@@ -548,11 +626,68 @@ function buildScenery() {
       leaf.rotation.set(0, (k / 8) * Math.PI * 2 + rand(-0.2, 0.2), -rand(0.25, 0.6));
       leaf.castShadow = true; palm.add(leaf);
     }
-    scene.add(palm);
+    world.add(palm);
   }
-  // rocks and bushes on the walkable ground (behind the action lane)
-  const rockMat = stdMat(0x77706a, 0.95, 0, { flatShading: true });
-  const bushMat = stdMat(0x3a6a26, 0.9, 0, { flatShading: true });
+}
+function buildPineFlora() {
+  const N = 340;
+  const trunkG = new THREE.CylinderGeometry(0.18, 0.3, 1, 6); trunkG.translate(0, 0.5, 0);
+  const coneG = new THREE.ConeGeometry(1, 1, 8); coneG.translate(0, 0.5, 0);
+  const trunks = new THREE.InstancedMesh(trunkG, stdMat(0x3a2a1e, 1), N);
+  const cones = new THREE.InstancedMesh(coneG, stdMat(0xffffff, 0.85, 0, { flatShading: true }), N * 2);
+  const M = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), col = new THREE.Color();
+  for (let i = 0; i < N; i++) {
+    const x = rand(-40, 340), z = rand(-38, -6.8), h = rand(4, 11), r = rand(1.3, 2.3);
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rand(0, 6));
+    p.set(x, -0.2, z); s.set(0.8, h * 0.35, 0.8); M.compose(p, q, s); trunks.setMatrixAt(i, M);
+    p.set(x, -0.2 + h * 0.2, z); s.set(r, h * 0.6, r); M.compose(p, q, s);
+    cones.setMatrixAt(i * 2, M); cones.setColorAt(i * 2, col.setHSL(0.38, 0.3, rand(0.1, 0.18)));
+    p.set(x, -0.2 + h * 0.5, z); s.set(r * 0.62, h * 0.45, r * 0.62); M.compose(p, q, s);
+    cones.setMatrixAt(i * 2 + 1, M); cones.setColorAt(i * 2 + 1, col.setRGB(0.92, 0.95, 1));   // snow cap
+  }
+  for (const im of [trunks, cones]) { im.castShadow = true; im.receiveShadow = true; world.add(im); }
+}
+function buildAlienFlora() {
+  const N = 260;
+  const crystalG = new THREE.ConeGeometry(1, 1, 5); crystalG.translate(0, 0.5, 0);
+  const crystals = new THREE.InstancedMesh(crystalG, stdMat(0xffffff, 0.2, 0.3, { flatShading: true, emissive: new THREE.Color(0.35, 0.05, 0.6) }), N);
+  const M = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), col = new THREE.Color(), e = new THREE.Euler();
+  for (let i = 0; i < N; i++) {
+    const x = rand(-40, 340), z = rand(-38, -7), h = rand(2, 9), r = rand(0.4, 1.1);
+    q.setFromEuler(e.set(rand(-0.25, 0.25), rand(0, 6), rand(-0.25, 0.25)));
+    p.set(x, -0.3, z); s.set(r, h, r); M.compose(p, q, s);
+    crystals.setMatrixAt(i, M);
+    crystals.setColorAt(i, Math.random() < 0.7 ? col.setHSL(rand(0.75, 0.92), 0.7, 0.45) : col.setHSL(rand(0.45, 0.52), 0.8, 0.5));
+  }
+  crystals.castShadow = true; world.add(crystals);
+  const pods = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 2), stdMat(0x103010, 0.4, 0, { emissive: new THREE.Color(0.2, 1.6, 0.6) }), 90);
+  for (let i = 0; i < 90; i++) {
+    p.set(rand(-30, 330), -0.1, rand(-30, -6.6)); s.setScalar(rand(0.25, 0.8)); M.compose(p, q.identity(), s);
+    pods.setMatrixAt(i, M);
+  }
+  world.add(pods);
+  const bone = stdMat(0xd8ccb8, 0.7);
+  for (let i = 0; i < 18; i++) {      // giant fossil ribs arching over the background
+    const rib = new THREE.Mesh(new THREE.TorusGeometry(rand(2.5, 4.2), rand(0.18, 0.3), 8, 20, Math.PI), bone);
+    rib.position.set(rand(-10, 320), -0.3, rand(-9, -7.2));
+    rib.rotation.y = rand(-0.4, 0.4);
+    rib.castShadow = true; world.add(rib);
+  }
+}
+function buildScenery(th) {
+  const mMat = stdMat(th.mount, 1, 0, { flatShading: true });
+  for (let i = 0; i < 34; i++) {
+    const h = rand(25, 55) * th.mountH, r = rand(18, 34);
+    const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, th.flora === 'alien' ? 4 : 7, 2), mMat);
+    m.position.set(-60 + i * 14 + rand(-6, 6), h / 2 - 4, rand(-150, -105));
+    m.rotation.y = rand(0, 6);
+    m.scale.x = rand(0.8, 1.4);
+    world.add(m);
+  }
+  if (th.flora === 'jungle') buildJungleFlora(); else if (th.flora === 'pine') buildPineFlora(); else buildAlienFlora();
+  // rocks and bushes / snow mounds / glowing fungus on the walkable ground (behind the action lane)
+  const rockMat = stdMat(th.rock, 0.95, 0, { flatShading: true });
+  const bushMat = stdMat(th.bush, 0.9, 0, { flatShading: true, emissive: new THREE.Color(th.bushEm) });
   for (let i = 0; i < 140; i++) {
     const x = rand(-25, 298), top = groundTopAt(x, 10);
     if (top < -1) continue;
@@ -562,10 +697,51 @@ function buildScenery() {
     m.scale.y = isRock ? rand(0.5, 0.9) : rand(0.6, 0.9);
     m.rotation.set(rand(0, 3), rand(0, 3), rand(0, 3));
     m.castShadow = m.receiveShadow = true;
-    scene.add(m);
+    world.add(m);
   }
 }
-buildScenery();
+
+function disposeWorld() {
+  world.traverse((o) => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) for (const m of [].concat(o.material)) { if (m.map) m.map.dispose(); m.dispose(); }
+  });
+  world.clear();
+}
+function applyTheme(th) {
+  paintSky(sky.geometry, th);
+  scene.fog.color.set(th.fog); scene.fog.near = th.fogNear; scene.fog.far = th.fogFar;
+  scene.background.set(th.fog);
+  hemi.color.set(th.hemi[0]); hemi.groundColor.set(th.hemi[1]); hemi.intensity = th.hemi[2];
+  sun.color.set(th.sun[0]); sun.intensity = th.sun[1];
+  sunDisc.material.color.setRGB(...th.disc);
+  water.material.color.set(th.water);
+  water.material.emissive.set(th.waterEm);
+  dust.material.color.set(th.dust);
+  if (envRT) envRT.dispose();
+  envRT = makeEnv(th);
+  scene.environment = envRT.texture;
+}
+/** Build the static world for a stage (only rebuilds when the stage changes). */
+function loadStage(i) {
+  stageIdx = i; STAGE = STAGES[i];
+  if (builtStage === i) return;
+  builtStage = i;
+  disposeWorld();
+  solids.length = 0;
+  for (const b of bridgeSegs) scene.remove(b.mesh);
+  bridgeSegs.length = 0;
+  const th = STAGE.theme;
+  STAGE.ground.forEach((g) => buildGround(...g, th));
+  STAGE.ledges.forEach((l) => buildLedge(...l, th));
+  addSolid(300, 340, -20, 60); // fortress wall (boss)
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(460, 2, 48), texMat(th.top, 90, 10, { color: th.floor }));
+  floor.position.set(150, -1.2, DEPTH_BACK - 24);
+  floor.receiveShadow = true;
+  world.add(floor);
+  buildScenery(th);
+  applyTheme(th);
+}
 
 // floating dust / pollen in sunlight
 const dust = (() => {
@@ -845,7 +1021,7 @@ function setFlash(mats, on) {
 // ======================================================================
 // GAME STATE
 // ======================================================================
-let state = 'title';  // title | play | paused | over | win
+let state = 'title';  // title | play | paused | over | clear | win
 let camX = 12, camY = 3.2, halfW = 13, time = 0;
 let score = 0, hiScore = +(localStorage.getItem('contra2026_hi') || 0);
 let spawnIdx = 0;
@@ -867,15 +1043,16 @@ const woodMat = texMat(texWood, 1, 1), railMat = stdMat(0x3a3d40, 0.4, 0.85);
 function buildBridge() {
   for (const b of bridgeSegs) { scene.remove(b.mesh); const k = solids.indexOf(b.solid); if (k >= 0) solids.splice(k, 1); }
   bridgeSegs.length = 0;
-  for (let i = 0; i < BRIDGE.count; i++) {
-    const x0 = BRIDGE.x0 + i * BRIDGE.seg, x1 = x0 + BRIDGE.seg;
+  const SEG = 4;
+  for (const br of STAGE.bridges) for (let i = 0; i < br.count; i++) {
+    const x0 = br.x0 + i * SEG, x1 = x0 + SEG;
     const g = new THREE.Group(); g.position.set((x0 + x1) / 2, 0, -0.5);
-    g.add(mesh(new THREE.BoxGeometry(BRIDGE.seg - 0.06, 0.3, 3.2), woodMat, 0, -0.15, 0));
+    g.add(mesh(new THREE.BoxGeometry(SEG - 0.06, 0.3, 3.2), woodMat, 0, -0.15, 0));
     for (const z of [-1.5, 1.5]) {
-      g.add(mesh(new THREE.BoxGeometry(BRIDGE.seg, 0.08, 0.08), railMat, 0, 1.0, z));
-      for (const px of [-BRIDGE.seg / 2 + 0.1, 0]) g.add(mesh(new THREE.BoxGeometry(0.1, 1.0, 0.1), railMat, px, 0.5, z));
+      g.add(mesh(new THREE.BoxGeometry(SEG, 0.08, 0.08), railMat, 0, 1.0, z));
+      for (const px of [-SEG / 2 + 0.1, 0]) g.add(mesh(new THREE.BoxGeometry(0.1, 1.0, 0.1), railMat, px, 0.5, z));
     }
-    g.add(mesh(new THREE.BoxGeometry(BRIDGE.seg, 0.18, 0.2), railMat, 0, -0.35, 1.5));
+    g.add(mesh(new THREE.BoxGeometry(SEG, 0.18, 0.2), railMat, 0, -0.35, 1.5));
     scene.add(g);
     bridgeSegs.push({ x0, x1, mesh: g, solid: addSolid(x0, x1, -0.4, 0, { dynamic: true }), state: 'intact', t: 0 });
   }
@@ -896,20 +1073,10 @@ function updateBridge(dt) {
 }
 
 // ---------- Spawns ----------
-const SPAWNS = [
-  { x: 14, t: 'runners', n: 2 }, { x: 22, t: 'flyer', drop: 'M' }, { x: 28, t: 'rifle', px: 38, py: 0 },
-  { x: 40, t: 'runners', n: 3 }, { x: 50, t: 'runners', n: 2, side: -1 }, { x: 68, t: 'rifle', px: 90, py: 5.2 },
-  { x: 72, t: 'runners', n: 3 }, { x: 86, t: 'turret', px: 104, py: 0 }, { x: 96, t: 'flyer', drop: 'S' },
-  { x: 112, t: 'runners', n: 3 }, { x: 128, t: 'rifle', px: 145, py: 2.6 }, { x: 140, t: 'runners', n: 3 },
-  { x: 155, t: 'rifle', px: 176, py: 2 }, { x: 160, t: 'turret', px: 186, py: 2 }, { x: 170, t: 'runners', n: 4 },
-  { x: 178, t: 'flyer', drop: 'L' }, { x: 194, t: 'runners', n: 3 }, { x: 205, t: 'rifle', px: 230, py: 5.4 },
-  { x: 210, t: 'turret', px: 237, py: 0 }, { x: 220, t: 'runners', n: 4 }, { x: 232, t: 'flyer', drop: 'S' },
-  { x: 240, t: 'rifle', px: 256, py: 0 }, { x: 250, t: 'runners', n: 4 }, { x: 258, t: 'rifle', px: 274, py: 0 },
-  { x: 264, t: 'runners', n: 3 }, { x: 276, t: 'boss' },
-];
+
 function handleSpawns() {
-  while (spawnIdx < SPAWNS.length && camX >= SPAWNS[spawnIdx].x) {
-    const s = SPAWNS[spawnIdx++];
+  while (spawnIdx < STAGE.spawns.length && camX >= STAGE.spawns[spawnIdx].x) {
+    const s = STAGE.spawns[spawnIdx++];
     if (s.t === 'runners') for (let i = 0; i < s.n; i++) after(i * 0.75, () => spawnRunner(s.side || 1));
     else if (s.t === 'rifle') { const y = groundTopAt(s.px, s.py + 0.5); if (y > -5) makeSoldier('rifle', s.px, y, -1); }
     else if (s.t === 'turret') makeTurret(s.px, groundTopAt(s.px, s.py + 0.5));
@@ -1048,7 +1215,7 @@ function updateEnemies(dt) {
     switch (e.type) {
       case 'runner': {
         if (e.onGround) {
-          e.vx = e.dir * 5.5; e.facing = e.dir;
+          e.vx = e.dir * 5.5 * (1 + (STAGE.diff - 1) * 0.5); e.facing = e.dir;
           const ahead = groundTopAt(e.x + e.dir * 1.1, e.y + 0.5);
           if ((ahead < e.y - 0.5 && e.jumpy) || e.hitWall) e.vy = 14;
         }
@@ -1074,7 +1241,7 @@ function updateEnemies(dt) {
           sfx.enemyShot();
           fx.spawn(e.x + dX * 1.25, e.y + 1.5 + dY * 1.2, 0.2, { life: 0.06, s0: 0.8, color: C.muzzle });
           e.burst++;
-          if (e.burst >= 3) { e.burst = 0; e.fireT = rand(1.4, 2.2); } else e.fireT = 0.18;
+          if (e.burst >= 3) { e.burst = 0; e.fireT = rand(1.4, 2.2) / STAGE.diff; } else e.fireT = 0.18;
         }
         if (e.y < DEATH_Y || e.x < camX - halfW - 6) { e.alive = false; scene.remove(e.model.root); }
         break;
@@ -1091,7 +1258,7 @@ function updateEnemies(dt) {
           fireBullet(mx + dX * 1.8, my + dY * 1.8, dX, dY, 9, { mat: BMAT.E, glow: GLOW.red, life: 3, scale: 1.4 });
           fx.spawn(mx + dX * 1.8, my + dY * 1.8, 0.3, { life: 0.08, s0: 1.4, color: C.muzzle });
           flash(mx + dX * 1.8, my + dY * 1.8, 1, 0xff7030, 60, 0.12);
-          sfx.enemyShot(); e.fireT = 1.7;
+          sfx.enemyShot(); e.fireT = 1.7 / STAGE.diff;
         }
         if (e.x < camX - halfW - 4) { e.alive = false; junk.push(e.model.root); }
         break;
@@ -1203,7 +1370,7 @@ function buildBossModel() {
 buildBossModel();
 
 function activateBoss() {
-  boss.active = true; boss.dying = 0; boss.spawnT = 3;
+  boss.active = true; boss.dying = 0; boss.spawnT = 3; boss.maxHp = STAGE.bossHp;
   sfx.alarm();
   document.getElementById('boss').classList.remove('hidden');
   const core = { type: 'core', x: 299.55, y: 2.0, hp: boss.maxHp, alive: true, mats: [], flash: 0, score: 10000 };
@@ -1230,7 +1397,7 @@ function updateCannon(e, dt) {
   e.pivot.rotation.z = lerp(e.pivot.rotation.z, target, Math.min(1, dt * 4));
   e.fireT -= dt;
   if (e.fireT <= 0 && !player.dead) {
-    e.fireT = rand(2.0, 2.8);
+    e.fireT = rand(2.0, 2.8) / STAGE.diff;
     const m = mesh(new THREE.SphereGeometry(0.28, 12, 10), stdMat(0x1a1a1a, 0.4, 0.8, { emissive: new THREE.Color(1.5, 0.2, 0) }));
     m.position.set(mx, my, 0); scene.add(m);
     bombs.push({ x: mx, y: my, vx: v.vx, vy: v.vy, mesh: m });
@@ -1250,7 +1417,7 @@ function updateCore(e, dt) {
   boss.lights.forEach((l, i) => l.emissive.setRGB(Math.sin(time * 5 + i * 2) > 0 ? 6 : 0.2, 0.4, 0.1));
   boss.spawnT -= dt;
   if (boss.spawnT <= 0) {
-    boss.spawnT = 3.6;
+    boss.spawnT = 3.6 / STAGE.diff;
     if (enemies.filter((x) => x.type === 'runner').length < 3) {
       const r = makeSoldier('runner', 298.4, 0, -1); r.jumpy = false;
       puff(298.4, 0.2, 5);
@@ -1432,13 +1599,14 @@ function updateCamera(dt) {
 const $ = (id) => document.getElementById(id);
 let hudCache = '';
 function updateHud() {
-  const key = `${player.lives}|${score}|${player.weapon}`;
+  const key = `${player.lives}|${score}|${player.weapon}|${stageIdx}`;
   if (key === hudCache) return;
   hudCache = key;
   $('lives').innerHTML = '<div class="medal"></div>'.repeat(Math.max(0, player.lives));
   $('score').textContent = String(score).padStart(6, '0');
   $('hi').textContent = 'HI ' + String(hiScore).padStart(6, '0');
   $('weapon').textContent = WEAPONS[player.weapon].name;
+  $('stage').textContent = `STAGE ${stageIdx + 1} / ${STAGES.length}`;
 }
 function showScreen(title, sub, hint) {
   const s = $('screen');
@@ -1452,7 +1620,9 @@ function hideScreen() { $('screen').classList.add('hidden'); }
 function onKeyPress(code) {
   if (code === 'Enter' || code === 'NumpadEnter' || (state !== 'play' && state !== 'paused' && code === 'Space')) {
     sfx.init();
-    if (state === 'title' || state === 'over' || state === 'win') startGame();
+    if (state === 'title' || state === 'win') startGame(0, false);
+    else if (state === 'over') startGame(stageIdx, false);   // continue from the stage you died on
+    else if (state === 'clear') startGame(stageIdx + 1, true);
     else if (state === 'paused') togglePause();
     return;
   }
@@ -1460,18 +1630,34 @@ function onKeyPress(code) {
   if (code === 'KeyM') { sfx.musicOn = !sfx.musicOn; if (sfx.ctx) sfx.nextT = sfx.ctx.currentTime + 0.05; }
 }
 function togglePause() {
-  if (state === 'play') { state = 'paused'; showScreen('PAUSED', 'STAGE 1 · JUNGLE ASSAULT', 'PRESS P / ESC / ENTER TO RESUME'); }
+  if (state === 'play') { state = 'paused'; showScreen('PAUSED', stageLabel(), 'PRESS P / ESC / ENTER TO RESUME'); }
   else if (state === 'paused') { state = 'play'; hideScreen(); last = performance.now(); }
 }
 function gameOver() {
   state = 'over';
   document.getElementById('boss').classList.add('hidden');
-  showScreen('GAME <em>OVER</em>', `SCORE ${String(score).padStart(6, '0')}`, 'PRESS ENTER TO CONTINUE');
+  showScreen('GAME <em>OVER</em>', `${stageLabel()} · SCORE ${String(score).padStart(6, '0')}`, 'PRESS ENTER TO CONTINUE FROM THIS STAGE');
 }
+const stageLabel = (i = stageIdx) => `STAGE ${i + 1} · ${STAGES[i].name}`;
 function winGame() {
-  state = 'win';
   addScore(player.lives * 5000);
-  showScreen('MISSION <em>COMPLETE</em>', `SCORE ${String(score).padStart(6, '0')} · HI ${String(hiScore).padStart(6, '0')}`, 'PRESS ENTER TO PLAY AGAIN');
+  document.getElementById('boss').classList.add('hidden');
+  const sc = `SCORE ${String(score).padStart(6, '0')} · HI ${String(hiScore).padStart(6, '0')}`;
+  if (stageIdx < STAGES.length - 1) {
+    state = 'clear';
+    showScreen(`STAGE ${stageIdx + 1} <em>CLEAR</em>`, sc, `PRESS ENTER FOR ${stageLabel(stageIdx + 1)}`);
+  } else {
+    state = 'win';
+    showScreen('MISSION <em>COMPLETE</em>', sc, 'ALL STAGES CLEARED · PRESS ENTER TO PLAY AGAIN');
+  }
+}
+let bannerT = 0;
+function showBanner() {
+  const b = $('banner');
+  b.innerHTML = `<small>STAGE ${stageIdx + 1}</small>${STAGE.name}`;
+  b.classList.remove('hidden'); b.style.opacity = 1;
+  clearTimeout(bannerT);
+  bannerT = setTimeout(() => { b.style.opacity = 0; bannerT = setTimeout(() => b.classList.add('hidden'), 600); }, 2400);
 }
 
 function clearDynamic() {
@@ -1485,21 +1671,26 @@ function clearDynamic() {
   for (const a of [enemies, corpses, bullets, bombs, pickups, debris, junk, timers, wrecks]) a.length = 0;
   fx.clear(); smoke.clear();
 }
-function startGame() {
+/** Start stage i. carry = keep score, lives and weapon from the previous stage. */
+function startGame(i = 0, carry = false) {
   clearDynamic();
+  loadStage(i);
   buildBridge();
   boss.active = false; boss.dying = 0;
   boss.coreMesh.visible = true;
   for (const d of boss.cannonDefs) d.pivot.visible = true;
   document.getElementById('boss').classList.add('hidden');
   document.getElementById('bossfill').style.width = '100%';
-  spawnIdx = 0; camX = 12; camY = 3.2; score = 0; hudCache = '';
-  Object.assign(player, { x: 3, y: 6, vx: 0, vy: 0, dead: false, lives: 3, weapon: 'R', invuln: 2, somersault: true, prone: false, h: 1.8, onGround: false, fireCd: 0 });
-  player.model.spin.rotation.z = 0;
+  spawnIdx = 0; camX = 12; camY = 3.2; hudCache = '';
+  if (!carry) { score = 0; player.lives = 3; player.weapon = 'R'; }
+  Object.assign(player, { x: 3, y: 6, vx: 0, vy: 0, dead: false, invuln: 2, somersault: true, prone: false, h: 1.8, onGround: false, fireCd: 0 });
+  player.model.spin.rotation.z = 0; player.model.root.visible = true;
+  sfx.key = STAGE.key; sfx.tempo = STAGE.tempo;
   sfx.musicOn = true; if (sfx.ctx) sfx.nextT = sfx.ctx.currentTime + 0.1;
   state = 'play';
   hideScreen();
   $('hud').classList.remove('hidden');
+  showBanner();
 }
 
 // ======================================================================
@@ -1531,7 +1722,7 @@ function frame(now) {
   last = now;
   visualT += dt;
   let jumpPressed = readInput();
-  if (state === 'play' || state === 'win') {
+  if (state === 'play' || state === 'win' || state === 'clear') {
     acc += dt;
     while (acc >= FIXED) { step(FIXED, jumpPressed); jumpPressed = false; acc -= FIXED; }
     updateHud();
@@ -1556,6 +1747,7 @@ window.addEventListener('resize', () => {
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'play') togglePause(); });
 
+loadStage(0);
 buildBridge();
 updateCamera(0);
 $('screen-hint').textContent = 'PRESS ENTER / START';
