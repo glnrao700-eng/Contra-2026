@@ -331,10 +331,10 @@ if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
     if (d < 12) { knob.style.transform = ''; return; }            // touching the very centre: keep current aim
     if (d > R) { dx *= R / d; dy *= R / d; }
     knob.style.transform = `translate(${dx}px, ${dy}px)`;
-    const ang = Math.round(Math.atan2(-dy, dx) / (Math.PI / 4)) * (Math.PI / 4);   // snap to 8 directions
-    const x = Math.round(Math.cos(ang)), y = Math.round(Math.sin(ang));
-    if (x > 0) keys.add('ArrowRight'); if (x < 0) keys.add('ArrowLeft');
-    if (y > 0) keys.add('ArrowUp'); if (y < 0) keys.add('ArrowDown');
+    const ang = Math.atan2(-dy, dx);                    // full 360° analog aim, no snapping
+    const x = Math.cos(ang), y = Math.sin(ang);
+    if (x > 0.38) keys.add('ArrowRight'); if (x < -0.38) keys.add('ArrowLeft');   // run when pointing sideways
+    if (y < -0.92) keys.add('ArrowDown');                                         // straight down = prone / drop
     touchAim = { x, y };
     dirDot.style.transform = `rotate(${-ang}rad)`;
     dirDot.classList.add('on');
@@ -1533,10 +1533,10 @@ function updatePlayer(dt, jumpPressed) {
   if (inp.left) ax = -1; else if (inp.right) ax = 1;
   if (inp.up) ay = 1;
   else if (inp.down && (!p.onGround || ax !== 0)) ay = -1;
-  if (ax === 0 && ay === 0 && touchAim) {
+  if (touchAim) {                         // touch joystick: aim at the exact angle, front or back
     ax = touchAim.x; ay = touchAim.y;
-    if (ax) p.facing = ax;
-    if (ay < 0 && ax === 0 && p.onGround) { ax = p.facing; ay = 0; }   // never shoot straight into the ground
+    if (Math.abs(ax) > 0.05) p.facing = Math.sign(ax);
+    if (p.prone || (p.onGround && ay < -0.92)) { ax = p.facing; ay = 0; }   // never shoot straight into the ground
   }
   if (ax === 0 && ay === 0) ax = p.facing;
   if (ay !== 0 && ax === 0) ax = 0;
