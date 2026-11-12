@@ -366,7 +366,7 @@ function readInput() {
   input.up = keys.has('ArrowUp') || keys.has('KeyW') || ay < -0.45 || btn(12);
   input.down = keys.has('ArrowDown') || keys.has('KeyS') || ay > 0.45 || btn(13);
   input.jump = keys.has('Space') || keys.has('KeyZ') || keys.has('KeyK') || btn(0);
-  input.fire = keys.has('KeyX') || keys.has('KeyJ') || keys.has('ControlLeft') || btn(2) || btn(7) || btn(5);
+  input.fire = true; // auto-fire: the gun shoots continuously in the aim direction
   const jumpPressed = input.jump && !prevJump;
   prevJump = input.jump;
   const start = btn(9);
