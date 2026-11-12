@@ -35,11 +35,21 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; colo
 .tiny { margin-top: 26px; font-size: 10px; opacity: .45; letter-spacing: 2px; }
 @keyframes blink { 50% { opacity: .15; } }
 
-#touch { position: fixed; inset: auto 0 0 0; height: 200px; pointer-events: none; }
+#touch { position: fixed; inset: 0; pointer-events: none; }
+/* Floating joystick: touch anywhere in the left zone, drag the point to move/aim */
+#stick-zone { position: absolute; left: 0; bottom: 0; width: 50%; height: 65%; pointer-events: auto; touch-action: none; }
+#stick { position: absolute; left: 110px; top: calc(100% - 110px); width: 130px; height: 130px; margin: -65px 0 0 -65px;
+  border-radius: 50%; border: 2px solid rgba(255,255,255,.3); background: radial-gradient(circle, rgba(255,255,255,.04), rgba(255,255,255,.14));
+  opacity: .55; transition: opacity .15s; }
+#stick.active { opacity: 1; }
+#knob { position: absolute; left: 50%; top: 50%; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fff6c0, #ffb000); box-shadow: 0 0 14px #ff9a00; }
+#stick-dir { position: absolute; left: 50%; top: 50%; width: 0; height: 0; opacity: 0; }
+#stick-dir::after { content: ''; position: absolute; left: 44px; top: -7px; width: 14px; height: 14px; border-radius: 50%;
+  background: rgba(255,210,80,.9); box-shadow: 0 0 10px #ffb000; }
+#stick.active #stick-dir.on { opacity: 1; }
 #touch button { pointer-events: auto; position: absolute; border: 2px solid rgba(255,255,255,.35); background: rgba(255,255,255,.1);
   color: #fff; font-family: inherit; border-radius: 50%; width: 62px; height: 62px; font-size: 18px; touch-action: none; }
-#touch .pad { position: absolute; left: 24px; bottom: 24px; width: 190px; height: 190px; }
-.t-up { left: 64px; top: 0; } .t-down { left: 64px; bottom: 0; } .t-left { left: 0; top: 64px; } .t-right { right: 0; top: 64px; }
 #touch .btns { position: absolute; right: 24px; bottom: 24px; width: 170px; height: 150px; }
 #touch .t-fire { right: 90px; bottom: 10px; width: 76px; height: 76px; font-size: 12px; }
 #touch .t-jump { right: 0; bottom: 60px; width: 76px; height: 76px; font-size: 12px; }

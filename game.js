@@ -306,6 +306,51 @@ if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
     const up = () => keys.delete(k);
     b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); b.addEventListener('pointerleave', up);
   });
+
+  // Virtual joystick: drag the point; its direction snaps to the 8 Contra aim directions.
+  const zone = document.getElementById('stick-zone'), stick = document.getElementById('stick');
+  const knob = document.getElementById('knob'), dirDot = document.getElementById('stick-dir');
+  const R = 55, DIRS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+  let stickId = null, cx = 0, cy = 0;
+  const setDir = (dx, dy) => {
+    DIRS.forEach((k) => keys.delete(k));
+    if (Math.hypot(dx, dy) < R * 0.3) { dirDot.classList.remove('on'); return; }   // dead zone
+    const ang = Math.round(Math.atan2(-dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+    const x = Math.round(Math.cos(ang)), y = Math.round(Math.sin(ang));
+    if (x > 0) keys.add('ArrowRight'); if (x < 0) keys.add('ArrowLeft');
+    if (y > 0) keys.add('ArrowUp'); if (y < 0) keys.add('ArrowDown');
+    dirDot.style.transform = `rotate(${-ang}rad)`;
+    dirDot.classList.add('on');
+  };
+  const move = (e) => {
+    let dx = e.clientX - cx, dy = e.clientY - cy;
+    const d = Math.hypot(dx, dy);
+    if (d > R) { dx *= R / d; dy *= R / d; }
+    knob.style.transform = `translate(${dx}px, ${dy}px)`;
+    setDir(dx, dy);
+  };
+  const release = (e) => {
+    if (e.pointerId !== stickId) return;
+    stickId = null;
+    knob.style.transform = '';
+    stick.style.left = stick.style.top = '';
+    stick.classList.remove('active');
+    setDir(0, 0);
+  };
+  zone.addEventListener('pointerdown', (e) => {
+    if (stickId !== null) return;
+    e.preventDefault();
+    stickId = e.pointerId;
+    zone.setPointerCapture(e.pointerId);
+    const r = zone.getBoundingClientRect();
+    cx = e.clientX; cy = e.clientY;
+    stick.style.left = `${cx - r.left}px`; stick.style.top = `${cy - r.top}px`;   // joystick appears under the thumb
+    stick.classList.add('active');
+    move(e);
+  });
+  zone.addEventListener('pointermove', (e) => { if (e.pointerId === stickId) move(e); });
+  zone.addEventListener('pointerup', release);
+  zone.addEventListener('pointercancel', release);
 }
 
 const input = { left: false, right: false, up: false, down: false, jump: false, fire: false };
