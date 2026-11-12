@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>CONTRA 2026 · Fan Remake</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="hud" class="hidden">
+    <div class="hud-left">
+      <div id="lives"></div>
+      <div id="weapon">RIFLE</div>
+    </div>
+    <div class="hud-right">
+      <div id="score">000000</div>
+      <div id="hi">HI 000000</div>
+    </div>
+    <div id="boss" class="hidden">
+      <span>FORTRESS CORE</span>
+      <div class="bar"><div id="bossfill"></div></div>
+    </div>
+  </div>
+
+  <div id="flash"></div>
+
+  <div id="screen" class="screen">
+    <h1>CONTRA <em>2026</em></h1>
+    <p class="sub">STAGE 1 · JUNGLE ASSAULT</p>
+    <p class="blink" id="screen-hint">LOADING…</p>
+    <div class="controls">
+      <div><b>← → / A D</b> Run</div>
+      <div><b>↑ ↓ / W S</b> Aim · Prone</div>
+      <div><b>SPACE / Z / K</b> Jump (hold = higher)</div>
+      <div><b>↓ + JUMP</b> Drop through ledge</div>
+      <div><b>X / J</b> Fire (hold)</div>
+      <div><b>P / ESC</b> Pause · <b>M</b> Music</div>
+      <div><b>GAMEPAD</b> Supported</div>
+    </div>
+    <p class="tiny">Fan-made tribute. Not affiliated with Konami.</p>
+  </div>
+
+  <div id="touch" class="hidden">
+    <div class="pad">
+      <button data-key="ArrowUp" class="t-up">▲</button>
+      <button data-key="ArrowLeft" class="t-left">◀</button>
+      <button data-key="ArrowRight" class="t-right">▶</button>
+      <button data-key="ArrowDown" class="t-down">▼</button>
+    </div>
+    <div class="btns">
+      <button data-key="KeyX" class="t-fire">FIRE</button>
+      <button data-key="Space" class="t-jump">JUMP</button>
+    </div>
+  </div>
+
+  <script>
+    // Shown if the 3D engine could not be downloaded (offline / blocked CDN).
+    setTimeout(function () {
+      if (!window.__gameLoaded) {
+        document.getElementById('screen-hint').textContent =
+          'Could not load the 3D engine (three.js from cdn.jsdelivr.net). Check your internet connection and reload.';
+      }
+    }, 8000);
+  </script>
+  <script type="module" src="game.js"></script>
+</body>
+</html>
