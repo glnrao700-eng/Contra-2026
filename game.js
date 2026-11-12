@@ -297,6 +297,7 @@ const sfx = {
 // INPUT (keyboard + gamepad + touch)
 // ======================================================================
 const keys = new Set();
+let touchAim = null; // last direction picked on the touch joystick; firing keeps this aim after release
 const BLOCK = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'];
 window.addEventListener('keydown', (e) => {
   if (BLOCK.includes(e.code)) e.preventDefault();
@@ -315,48 +316,45 @@ if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
     b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); b.addEventListener('pointerleave', up);
   });
 
-  // Virtual joystick: drag the point; its direction snaps to the 8 Contra aim directions.
+  // Fixed joystick: touch anywhere around it and the point jumps to that direction (no dragging needed).
+  // Holding moves + aims; after you let go the gun keeps firing in the last direction (touchAim).
   const zone = document.getElementById('stick-zone'), stick = document.getElementById('stick');
   const knob = document.getElementById('knob'), dirDot = document.getElementById('stick-dir');
   const R = 55, DIRS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
-  let stickId = null, cx = 0, cy = 0;
-  const setDir = (dx, dy) => {
+  let stickId = null;
+  const center = () => { const r = stick.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
+  const point = (e) => {
+    const c = center();
+    let dx = e.clientX - c.x, dy = e.clientY - c.y;
+    const d = Math.hypot(dx, dy);
     DIRS.forEach((k) => keys.delete(k));
-    if (Math.hypot(dx, dy) < R * 0.3) { dirDot.classList.remove('on'); return; }   // dead zone
-    const ang = Math.round(Math.atan2(-dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+    if (d < 12) { knob.style.transform = ''; return; }            // touching the very centre: keep current aim
+    if (d > R) { dx *= R / d; dy *= R / d; }
+    knob.style.transform = `translate(${dx}px, ${dy}px)`;
+    const ang = Math.round(Math.atan2(-dy, dx) / (Math.PI / 4)) * (Math.PI / 4);   // snap to 8 directions
     const x = Math.round(Math.cos(ang)), y = Math.round(Math.sin(ang));
     if (x > 0) keys.add('ArrowRight'); if (x < 0) keys.add('ArrowLeft');
     if (y > 0) keys.add('ArrowUp'); if (y < 0) keys.add('ArrowDown');
+    touchAim = { x, y };
     dirDot.style.transform = `rotate(${-ang}rad)`;
     dirDot.classList.add('on');
-  };
-  const move = (e) => {
-    let dx = e.clientX - cx, dy = e.clientY - cy;
-    const d = Math.hypot(dx, dy);
-    if (d > R) { dx *= R / d; dy *= R / d; }
-    knob.style.transform = `translate(${dx}px, ${dy}px)`;
-    setDir(dx, dy);
   };
   const release = (e) => {
     if (e.pointerId !== stickId) return;
     stickId = null;
     knob.style.transform = '';
-    stick.style.left = stick.style.top = '';
     stick.classList.remove('active');
-    setDir(0, 0);
+    DIRS.forEach((k) => keys.delete(k));                       // stop moving, keep the aim
   };
   zone.addEventListener('pointerdown', (e) => {
     if (stickId !== null) return;
     e.preventDefault();
     stickId = e.pointerId;
     zone.setPointerCapture(e.pointerId);
-    const r = zone.getBoundingClientRect();
-    cx = e.clientX; cy = e.clientY;
-    stick.style.left = `${cx - r.left}px`; stick.style.top = `${cy - r.top}px`;   // joystick appears under the thumb
     stick.classList.add('active');
-    move(e);
+    point(e);
   });
-  zone.addEventListener('pointermove', (e) => { if (e.pointerId === stickId) move(e); });
+  zone.addEventListener('pointermove', (e) => { if (e.pointerId === stickId) point(e); });
   zone.addEventListener('pointerup', release);
   zone.addEventListener('pointercancel', release);
 }
@@ -1535,6 +1533,11 @@ function updatePlayer(dt, jumpPressed) {
   if (inp.left) ax = -1; else if (inp.right) ax = 1;
   if (inp.up) ay = 1;
   else if (inp.down && (!p.onGround || ax !== 0)) ay = -1;
+  if (ax === 0 && ay === 0 && touchAim) {
+    ax = touchAim.x; ay = touchAim.y;
+    if (ax) p.facing = ax;
+    if (ay < 0 && ax === 0 && p.onGround) { ax = p.facing; ay = 0; }   // never shoot straight into the ground
+  }
   if (ax === 0 && ay === 0) ax = p.facing;
   if (ay !== 0 && ax === 0) ax = 0;
   const len = Math.hypot(ax, ay); ax /= len; ay /= len;
