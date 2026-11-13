@@ -23,6 +23,7 @@ Needs internet on first load: three.js r160 is loaded from `cdn.jsdelivr.net` vi
 | Aim (8-way) | ↑ ↓ + direction | stick |
 | Prone | ↓ (standing) | down |
 | Jump (hold = higher) | Space / Z / K | A |
+| Long jump | Jump twice (2nd press in mid-air) | A twice |
 | Drop through ledge | ↓ + Jump | down + A |
 | Fire | Automatic (always on) | Automatic |
 | Pause | P / Esc | Start |

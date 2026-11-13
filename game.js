@@ -15,6 +15,8 @@ const G = -38;            // gravity (m/s²) – a little heavier than Earth for
 const FIXED = 1 / 120;    // physics step
 const RUN = 7;            // player run speed
 const JUMP = 15;        // player jump impulse
+const LONG_VX = 13;      // horizontal speed of the double-tap long jump
+const LONG_VY = 10.5;    // upward boost of the long jump
 const FOV = 45;
 const CAM_DIST = 18;
 const CAM_MAX_X = 290;    // camera locks here for the boss arena
@@ -1485,7 +1487,7 @@ function respawnPlayer() {
   if (p.lives < 0) { gameOver(); return; }
   let x = camX - halfW + 3;
   for (let k = 0; k < 60; k++) { if (groundTopAt(x, 40) > -5) break; x += 0.5; }
-  Object.assign(p, { x, y: camY + 7, vx: 0, vy: 0, dead: false, invuln: 3, weapon: 'R', somersault: true, onGround: false, splashed: false });
+  Object.assign(p, { x, y: camY + 7, vx: 0, vy: 0, dead: false, invuln: 3, weapon: 'R', somersault: true, onGround: false, splashed: false, longJump: false, canLong: false });
   p.model.spin.rotation.z = 0; p.model.root.visible = true;
 }
 function updatePlayer(dt, jumpPressed) {
@@ -1509,19 +1511,34 @@ function updatePlayer(dt, jumpPressed) {
   let dir = 0;
   if (!p.prone) { if (inp.left) dir -= 1; if (inp.right) dir += 1; }
   if (dir) p.facing = dir;
-  p.vx = approach(p.vx, dir * RUN, (p.onGround ? 70 : 38) * dt);
+  if (p.longJump && !p.onGround) {
+    // long jump keeps its momentum; holding the opposite direction brakes it
+    if (dir && dir !== Math.sign(p.vx)) p.vx = approach(p.vx, dir * RUN, 30 * dt);
+    else p.facing = Math.sign(p.vx) || p.facing;
+  } else p.vx = approach(p.vx, dir * RUN, (p.onGround ? 70 : 38) * dt);
 
   if (p.jumpBuf > 0 && (p.onGround || p.coyote > 0)) {
     if (inp.down && p.onGround && p.ground && p.ground.oneWay) { p.dropTimer = 0.3; p.y -= 0.02; p.onGround = false; }
-    else { p.vy = JUMP; p.somersault = true; sfx.jump(); puff(p.x, p.y, 5); }
+    else { p.vy = JUMP; p.somersault = true; p.canLong = true; sfx.jump(); puff(p.x, p.y, 5); }
     p.jumpBuf = 0; p.coyote = 0; p.prone = false; p.h = 1.8;
   }
+  // second JUMP press in mid-air = long jump (once per jump). Ignored just before landing so a buffered jump still works.
+  const nearLanding = p.vy < 0 && groundTopAt(p.x, p.y) > p.y - 0.8;
+  if (p.jumpBuf > 0 && !p.onGround && p.canLong && !nearLanding) {
+    p.canLong = false; p.longJump = true; p.jumpBuf = 0; p.somersault = true;
+    p.vy = Math.max(p.vy, LONG_VY);
+    p.vx = p.facing * LONG_VX;
+    sfx.jump(); sfx.tone(420, 900, 0.15, 0.06, 'triangle');
+    for (let k = 0; k < 10; k++) smoke.spawn(p.x - p.facing * 0.4, p.y + 0.8, rand(-0.3, 0.3), { vx: -p.facing * rand(2, 5), vy: rand(-1, 1), life: 0.5, s0: 0.3, s1: 1, drag: 3, color: C.dust, alpha: 0.6 });
+  }
+  if (p.longJump && !p.onGround && Math.random() < 0.5) fx.spawn(p.x, p.y + 0.9, 0, { vx: -p.vx * 0.2, life: 0.25, s0: 0.5, s1: 0.1, color: C.muzzle });
   // variable jump height: release early = heavier gravity on the way up; slightly heavier fall
-  p.gravScale = p.vy > 0 ? (inp.jump ? 1 : 2.1) : 1.1;
+  p.gravScale = p.longJump ? (p.vy > 0 ? 1 : 0.95) : p.vy > 0 ? (inp.jump ? 1 : 2.1) : 1.1;
   const wasGround = p.onGround;
   moveBody(p, dt);
   if (p.onGround) {
-    if (!wasGround) { p.somersault = false; sfx.land(); puff(p.x, p.y, 4); }
+    if (!wasGround) { p.somersault = false; sfx.land(); puff(p.x, p.y, p.longJump ? 8 : 4); }
+    p.longJump = false; p.canLong = false;
     p.coyote = 0.1;
   } else p.coyote -= dt;
   const minX = camX - halfW + 0.6;
@@ -1686,7 +1703,7 @@ function startGame(i = 0, carry = false) {
   document.getElementById('bossfill').style.width = '100%';
   spawnIdx = 0; camX = 12; camY = 3.2; hudCache = '';
   if (!carry) { score = 0; player.lives = 3; player.weapon = 'R'; }
-  Object.assign(player, { x: 3, y: 6, vx: 0, vy: 0, dead: false, invuln: 2, somersault: true, prone: false, h: 1.8, onGround: false, fireCd: 0 });
+  Object.assign(player, { longJump: false, canLong: false, x: 3, y: 6, vx: 0, vy: 0, dead: false, invuln: 2, somersault: true, prone: false, h: 1.8, onGround: false, fireCd: 0 });
   player.model.spin.rotation.z = 0; player.model.root.visible = true;
   sfx.key = STAGE.key; sfx.tempo = STAGE.tempo;
   sfx.musicOn = true; if (sfx.ctx) sfx.nextT = sfx.ctx.currentTime + 0.1;
